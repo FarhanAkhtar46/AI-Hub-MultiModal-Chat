@@ -67,7 +67,7 @@ export const ModelSelector = ({ selectedModels, onSelectionChange }: ModelSelect
             key={model.id}
             className={`p-4 cursor-pointer transition-all duration-300 hover:scale-105 ${
               isSelected 
-                ? `${model.shadow} border-opacity-50 ${model.gradient} bg-opacity-10` 
+                ? `${model.shadow} border-opacity-50 ${model.gradient} bg-opacity-20` 
                 : 'hover:shadow-soft'
             }`}
             onClick={() => toggleModel(model.id)}
@@ -81,17 +81,17 @@ export const ModelSelector = ({ selectedModels, onSelectionChange }: ModelSelect
               />
               <div className="flex-1 space-y-1">
                 <div className="flex items-center gap-2">
-                  <Icon className={`h-4 w-4 ${model.color}`} />
+                  <Icon className={`h-4 w-4 ${isSelected ? 'text-foreground' : model.color}`} />
                   <Label
                     htmlFor={model.id}
                     className={`font-medium cursor-pointer ${
-                      isSelected ? model.color : 'text-foreground'
+                      isSelected ? 'text-foreground font-semibold' : model.color
                     }`}
                   >
                     {model.name}
                   </Label>
                 </div>
-                <p className="text-sm text-muted-foreground">
+                <p className={`text-sm ${isSelected ? 'text-foreground/80' : 'text-muted-foreground'}`}>
                   {model.description}
                 </p>
               </div>
