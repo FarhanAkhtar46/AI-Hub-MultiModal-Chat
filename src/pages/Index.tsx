@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Send, Zap, Brain, Sparkles, Bot } from "lucide-react";
+import { Send, Zap, Brain, Sparkles, Bot, MessageSquare } from "lucide-react";
 import { ModelSelector } from "@/components/ModelSelector";
 import { ResponseCard } from "@/components/ResponseCard";
 import { ChatInput } from "@/components/ChatInput";
+import { ChatSessions } from "@/components/ChatSessions";
+import { ConversationHistory } from "@/components/ConversationHistory";
 
 type ApiModelResponse = {
   model: string;
@@ -21,6 +23,19 @@ type ApiModelResponse = {
 
 type ApiChatResponse = {
   responses: ApiModelResponse[];
+};
+
+type ChatSession = {
+  id: string;
+  title: string;
+  messages: Array<{
+    role: string;
+    content: string;
+    timestamp: string;
+    model_responses?: ApiModelResponse[] | null;
+  }>;
+  created_at: string;
+  updated_at: string;
 };
 
 const UI_TO_PROVIDER: Record<string, string> = {
@@ -42,6 +57,12 @@ const Index = () => {
   const [prompt, setPrompt] = useState("");
   const [responses, setResponses] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(false);
+  const [selectedSession, setSelectedSession] = useState<ChatSession | null>(null);
+  const [showNewMessageForm, setShowNewMessageForm] = useState(false);
+
+  const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (apiKey) headers["X-API-Key"] = apiKey;
 
   const handleSendPrompt = async () => {
     if (!prompt.trim() || selectedModels.length === 0) return;
@@ -53,10 +74,6 @@ const Index = () => {
       const providerModels = selectedModels
         .map((m) => UI_TO_PROVIDER[m])
         .filter((m): m is string => Boolean(m));
-
-      const apiKey = import.meta.env.VITE_API_KEY as string | undefined;
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (apiKey) headers["X-API-Key"] = apiKey;
 
       const resp = await fetch("/api/chat", {
         method: "POST",
@@ -85,7 +102,6 @@ const Index = () => {
       setResponses(aggregated);
     } catch (err) {
       console.error(err);
-      // Surface a generic error onto each selected model card
       const errorMsg = "Failed to get responses. Check backend and API keys.";
       const aggregated: Record<string, string> = {};
       for (const m of selectedModels) aggregated[m] = errorMsg;
@@ -93,6 +109,76 @@ const Index = () => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSendMessage = async () => {
+    if (!prompt.trim() || selectedModels.length === 0 || !selectedSession) return;
+
+    setIsLoading(true);
+    setResponses({});
+
+    try {
+      const providerModels = selectedModels
+        .map((m) => UI_TO_PROVIDER[m])
+        .filter((m): m is string => Boolean(m));
+
+      const resp = await fetch(`/api/sessions/${selectedSession.id}/messages`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          session_id: selectedSession.id,
+          content: prompt,
+          models: providerModels,
+          system_prompt: null,
+          temperature: 0.7,
+          max_tokens: 512,
+        }),
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `Request failed: ${resp.status}`);
+      }
+
+      const data: ApiChatResponse = await resp.json();
+
+      const aggregated: Record<string, string> = {};
+      for (const r of data.responses) {
+        const uiKey = PROVIDER_TO_UI[r.model] || r.model;
+        aggregated[uiKey] = r.output || r.error || "";
+      }
+      setResponses(aggregated);
+
+      // Refresh the session to get updated messages
+      const sessionResp = await fetch(`/api/sessions/${selectedSession.id}`, { headers });
+      if (sessionResp.ok) {
+        const sessionData = await sessionResp.json();
+        setSelectedSession(sessionData.session);
+      }
+
+      setPrompt("");
+    } catch (err) {
+      console.error(err);
+      const errorMsg = "Failed to get responses. Check backend and API keys.";
+      const aggregated: Record<string, string> = {};
+      for (const m of selectedModels) aggregated[m] = errorMsg;
+      setResponses(aggregated);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleNewMessage = () => {
+    setShowNewMessageForm(true);
+    setPrompt("");
+    setResponses({});
+  };
+
+  const handleSessionSelect = (session: ChatSession | null) => {
+    setSelectedSession(session);
+    setShowNewMessageForm(false);
+    setPrompt("");
+    setResponses({});
   };
 
   return (
@@ -111,7 +197,7 @@ const Index = () => {
                   AI Hub
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  Compare LLM responses in real-time
+                  Compare LLM responses with persistent chat history
                 </p>
               </div>
             </div>
@@ -127,7 +213,15 @@ const Index = () => {
       <div className="container mx-auto px-6 py-8 max-w-7xl">
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
           {/* Control Panel */}
-          <div className="xl:col-span-1">
+          <div className="xl:col-span-1 space-y-6">
+            {/* Chat Sessions */}
+            <ChatSessions
+              selectedSession={selectedSession}
+              onSessionSelect={handleSessionSelect}
+              onNewMessage={handleNewMessage}
+            />
+
+            {/* AI Models */}
             <Card className="bg-gradient-card border-border/50 shadow-soft sticky top-8">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
@@ -166,18 +260,74 @@ const Index = () => {
 
           {/* Chat Area */}
           <div className="xl:col-span-3 space-y-6">
+            {/* Session Info */}
+            {selectedSession && (
+              <Card className="bg-gradient-card border-border/50 shadow-soft">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MessageSquare className="h-5 w-5 text-primary" />
+                      <h3 className="text-lg font-semibold">{selectedSession.title}</h3>
+                      <Badge variant="outline" className="text-xs">
+                        {selectedSession.messages.length} messages
+                      </Badge>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedSession(null)}
+                    >
+                      Close Session
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Conversation History */}
+            {selectedSession && (
+              <Card className="bg-gradient-card border-border/50 shadow-soft">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <MessageSquare className="h-5 w-5" />
+                    Conversation History
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <ConversationHistory messages={selectedSession.messages} />
+                </CardContent>
+              </Card>
+            )}
+
             {/* Prompt Input */}
-            <Card className="bg-gradient-card border-border/50 shadow-soft">
-              <CardContent className="p-6">
-                <ChatInput
-                  prompt={prompt}
-                  onPromptChange={setPrompt}
-                  onSend={handleSendPrompt}
-                  isLoading={isLoading}
-                  disabled={selectedModels.length === 0}
-                />
-              </CardContent>
-            </Card>
+            {selectedSession && showNewMessageForm && (
+              <Card className="bg-gradient-card border-border/50 shadow-soft">
+                <CardContent className="p-6">
+                  <ChatInput
+                    prompt={prompt}
+                    onPromptChange={setPrompt}
+                    onSend={handleSendMessage}
+                    isLoading={isLoading}
+                    disabled={selectedModels.length === 0}
+                  />
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Legacy Single Prompt (when no session) */}
+            {!selectedSession && (
+              <Card className="bg-gradient-card border-border/50 shadow-soft">
+                <CardContent className="p-6">
+                  <ChatInput
+                    prompt={prompt}
+                    onPromptChange={setPrompt}
+                    onSend={handleSendPrompt}
+                    isLoading={isLoading}
+                    disabled={selectedModels.length === 0}
+                  />
+                </CardContent>
+              </Card>
+            )}
 
             {/* Responses Grid */}
             {(Object.keys(responses).length > 0 || isLoading) && (
@@ -195,7 +345,7 @@ const Index = () => {
             )}
 
             {/* Welcome Message */}
-            {Object.keys(responses).length === 0 && !isLoading && (
+            {Object.keys(responses).length === 0 && !isLoading && !selectedSession && (
               <div className="text-center py-12 space-y-4">
                 <div className="flex justify-center">
                   <div className="relative">
@@ -207,11 +357,11 @@ const Index = () => {
                   Welcome to AI Hub
                 </h2>
                 <p className="text-muted-foreground max-w-md mx-auto">
-                  Select your preferred AI models and enter a prompt to see how different LLMs respond to the same question.
+                  Create a chat session to start a conversation with multiple AI models, or use the single prompt mode for quick comparisons.
                 </p>
                 <div className="flex justify-center">
                   <Badge variant="outline" className="text-primary border-primary/20">
-                    Select models to get started
+                    Create a session to get started
                   </Badge>
                 </div>
               </div>
